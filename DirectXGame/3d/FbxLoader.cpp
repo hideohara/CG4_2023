@@ -80,6 +80,10 @@ void FbxLoader::LoadModelFromFile(
 
 
 
+	// バッファ生成
+	model->CreateBuffers(device);
+
+
 }
 
 
@@ -315,7 +319,6 @@ void FbxLoader::ParseMaterial(Model* model, FbxNode* fbxNode)
 }
 
 
-
 // テクスチャ読み込み
 
 void FbxLoader::LoadTexture(Model* model, const std::string& fullpath)
@@ -334,6 +337,7 @@ void FbxLoader::LoadTexture(Model* model, const std::string& fullpath)
 		assert(0);
 	}
 }
+
 
 
 

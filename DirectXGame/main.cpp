@@ -85,7 +85,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	FbxLoader::GetInstance()->Finalize();
 
 
-
 	// ゲームウィンドウの破棄
 	win->TerminateGameWindow();
 	safe_delete(win);
