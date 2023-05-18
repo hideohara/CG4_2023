@@ -1,44 +1,36 @@
-﻿#include "Object3d.h"
-#include "BaseCollider.h"
-#include "CollisionManager.h"
+﻿
+#include "Object3d.h"
 
 #include <d3dcompiler.h>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
-
 #pragma comment(lib, "d3dcompiler.lib")
 
-using namespace DirectX;
 using namespace Microsoft::WRL;
-using namespace std;
+using namespace DirectX;
+
 
 /// <summary>
 /// 静的メンバ変数の実体
 /// </summary>
 ID3D12Device* Object3d::device = nullptr;
-ID3D12GraphicsCommandList* Object3d::cmdList = nullptr;
-Object3d::PipelineSet Object3d::pipelineSet;
 Camera* Object3d::camera = nullptr;
-LightGroup* Object3d::lightGroup = nullptr;
 
-void Object3d::StaticInitialize(ID3D12Device * device, Camera* camera)
+
+ComPtr<ID3D12RootSignature> Object3d::rootsignature;
+ComPtr<ID3D12PipelineState> Object3d::pipelinestate;
+
+
+
+void Object3d::Initialize()
 {
-	// 再初期化チェック
-	assert(!Object3d::device);
-
-	// nullptrチェック
-	assert(device);
-
-	Object3d::device = device;
-	Object3d::camera = camera;
-
-	// グラフィックパイプラインの生成
-	CreateGraphicsPipeline();
-
-	// モデルの静的初期化
-	Model::StaticInitialize(device);
+	HRESULT result;
+	// 定数バッファの生成
+	result = device->CreateCommittedResource(
+		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+		D3D12_HEAP_FLAG_NONE,
+		&CD3DX12_RESOURCE_DESC::Buffer((sizeof(ConstBufferDataTransform) + 0xff) & ~0xff),
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&constBuffTransform));
 }
 
 void Object3d::CreateGraphicsPipeline()
@@ -48,9 +40,11 @@ void Object3d::CreateGraphicsPipeline()
 	ComPtr<ID3DBlob> psBlob;    // ピクセルシェーダオブジェクト
 	ComPtr<ID3DBlob> errorBlob; // エラーオブジェクト
 
+	assert(device);
+
 	// 頂点シェーダの読み込みとコンパイル
 	result = D3DCompileFromFile(
-		L"Resources/shaders/OBJVertexShader.hlsl",    // シェーダファイル名
+		L"Resources/shaders/FBXVS.hlsl",    // シェーダファイル名
 		nullptr,
 		D3D_COMPILE_STANDARD_FILE_INCLUDE, // インクルード可能にする
 		"main", "vs_5_0",    // エントリーポイント名、シェーダーモデル指定
@@ -73,7 +67,7 @@ void Object3d::CreateGraphicsPipeline()
 
 	// ピクセルシェーダの読み込みとコンパイル
 	result = D3DCompileFromFile(
-		L"Resources/shaders/OBJPixelShader.hlsl",    // シェーダファイル名
+		L"Resources/shaders/FBXPS.hlsl",    // シェーダファイル名
 		nullptr,
 		D3D_COMPILE_STANDARD_FILE_INCLUDE, // インクルード可能にする
 		"main", "ps_5_0",    // エントリーポイント名、シェーダーモデル指定
@@ -153,7 +147,7 @@ void Object3d::CreateGraphicsPipeline()
 	gpipeline.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 
 	gpipeline.NumRenderTargets = 1;    // 描画対象は1つ
-	gpipeline.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM; // 0～255指定のRGBA
+	gpipeline.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM; // 0～255指定のRGBA(SRGB版)
 	gpipeline.SampleDesc.Count = 1; // 1ピクセルにつき1回サンプリング
 
 	// デスクリプタレンジ
@@ -161,11 +155,11 @@ void Object3d::CreateGraphicsPipeline()
 	descRangeSRV.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // t0 レジスタ
 
 	// ルートパラメータ
-	CD3DX12_ROOT_PARAMETER rootparams[4];
+	CD3DX12_ROOT_PARAMETER rootparams[2];
+	// CBV（座標変換行列用）
 	rootparams[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
-	rootparams[1].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);
-	rootparams[2].InitAsDescriptorTable(1, &descRangeSRV, D3D12_SHADER_VISIBILITY_ALL);
-	rootparams[3].InitAsConstantBufferView(2, 0, D3D12_SHADER_VISIBILITY_ALL);
+	// SRV（テクスチャ）
+	rootparams[1].InitAsDescriptorTable(1, &descRangeSRV, D3D12_SHADER_VISIBILITY_ALL);
 
 	// スタティックサンプラー
 	CD3DX12_STATIC_SAMPLER_DESC samplerDesc = CD3DX12_STATIC_SAMPLER_DESC(0);
@@ -178,142 +172,18 @@ void Object3d::CreateGraphicsPipeline()
 	// バージョン自動判定のシリアライズ
 	result = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &rootSigBlob, &errorBlob);
 	// ルートシグネチャの生成
-	result = device->CreateRootSignature(0, rootSigBlob->GetBufferPointer(), rootSigBlob->GetBufferSize(), IID_PPV_ARGS(&pipelineSet.rootsignature));
-	if (FAILED(result)) {
-		assert(0);
-	}
+	result = device->CreateRootSignature(0, rootSigBlob->GetBufferPointer(), rootSigBlob->GetBufferSize(), IID_PPV_ARGS(rootsignature.ReleaseAndGetAddressOf()));
+	if (FAILED(result)) { assert(0); }
 
-	gpipeline.pRootSignature = pipelineSet.rootsignature.Get();
+	gpipeline.pRootSignature = rootsignature.Get();
 
 	// グラフィックスパイプラインの生成
-	result = device->CreateGraphicsPipelineState(&gpipeline, IID_PPV_ARGS(&pipelineSet.pipelinestate));
-
-	if (FAILED(result)) {
-		assert(0);
-	}
-}
-
-void Object3d::PreDraw(ID3D12GraphicsCommandList * cmdList)
-{
-	// PreDrawとPostDrawがペアで呼ばれていなければエラー
-	assert(Object3d::cmdList == nullptr);
-
-	// コマンドリストをセット
-	Object3d::cmdList = cmdList;
-
-	// プリミティブ形状を設定
-	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-}
-
-void Object3d::PostDraw()
-{
-	// コマンドリストを解除
-	Object3d::cmdList = nullptr;
-}
-
-Object3d * Object3d::Create(Model* model)
-{
-	// 3Dオブジェクトのインスタンスを生成
-	Object3d* object3d = new Object3d();
-	if (object3d == nullptr) {
-		return nullptr;
-	}
-
-	// 初期化
-	if (!object3d->Initialize()) {
-		delete object3d;
-		assert(0);
-	}
-
-	if (model) {
-		object3d->SetModel(model);
-	}
-
-	return object3d;
-}
-
-Object3d::~Object3d()
-{
-	if (collider) {
-		CollisionManager::GetInstance()->RemoveCollider(collider);
-		delete collider;
-	}
-}
-
-bool Object3d::Initialize()
-{
-	// nullptrチェック
-	assert(device);
-
-	name = typeid(*this).name();
-
-	HRESULT result;
-	// 定数バッファの生成
-	result = device->CreateCommittedResource(
-		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), 	// アップロード可能
-		D3D12_HEAP_FLAG_NONE,
-		&CD3DX12_RESOURCE_DESC::Buffer((sizeof(ConstBufferDataB0) + 0xff)&~0xff),
-		D3D12_RESOURCE_STATE_GENERIC_READ,
-		nullptr,
-		IID_PPV_ARGS(&constBuffB0));
-
-	return true;
+	result = device->CreateGraphicsPipelineState(&gpipeline, IID_PPV_ARGS(pipelinestate.ReleaseAndGetAddressOf()));
+	if (FAILED(result)) { assert(0); }
 }
 
 void Object3d::Update()
 {
-	assert(camera);
-
-	HRESULT result;
-	
-	UpdateWorldMatrix();
-
-	const XMMATRIX& matViewProjection = camera->GetViewProjectionMatrix();
-	const XMFLOAT3& cameraPos = camera->GetEye();
-
-	// 定数バッファへデータ転送
-	ConstBufferDataB0* constMap = nullptr;
-	result = constBuffB0->Map(0, nullptr, (void**)&constMap);
-	constMap->viewproj = matViewProjection;
-	constMap->world = matWorld;
-	constMap->cameraPos = cameraPos;
-	constBuffB0->Unmap(0, nullptr);
-
-	// 当たり判定更新
-	if (collider) {
-		collider->Update();
-	}
-}
-
-void Object3d::Draw()
-{
-	// nullptrチェック
-	assert(device);
-	assert(Object3d::cmdList);
-
-	// モデルの割り当てがなければ描画しない
-	if (model == nullptr) {
-		return;
-	}
-
-	// パイプラインステートの設定
-	cmdList->SetPipelineState(pipelineSet.pipelinestate.Get());
-	// ルートシグネチャの設定
-	cmdList->SetGraphicsRootSignature(pipelineSet.rootsignature.Get());
-	// 定数バッファビューをセット
-	cmdList->SetGraphicsRootConstantBufferView(0, constBuffB0->GetGPUVirtualAddress());
-
-	// ライトの描画
-	lightGroup->Draw(cmdList, 3);
-
-	// モデル描画
-	model->Draw(cmdList);
-}
-
-void Object3d::UpdateWorldMatrix()
-{
-	assert(camera);
-
 	XMMATRIX matScale, matRot, matTrans;
 
 	// スケール、回転、平行移動行列の計算
@@ -325,47 +195,50 @@ void Object3d::UpdateWorldMatrix()
 	matTrans = XMMatrixTranslation(position.x, position.y, position.z);
 
 	// ワールド行列の合成
-	if (isBillboard && camera) {
-		const XMMATRIX& matBillboard = camera->GetBillboardMatrix();
+	matWorld = XMMatrixIdentity(); // 変形をリセット
+	matWorld *= matScale; // ワールド行列にスケーリングを反映
+	matWorld *= matRot; // ワールド行列に回転を反映
+	matWorld *= matTrans; // ワールド行列に平行移動を反映
 
-		matWorld = XMMatrixIdentity();
-		matWorld *= matScale; // ワールド行列にスケーリングを反映
-		matWorld *= matRot; // ワールド行列に回転を反映
-		matWorld *= matBillboard;
-		matWorld *= matTrans; // ワールド行列に平行移動を反映
-	}
-	else {
-		matWorld = XMMatrixIdentity(); // 変形をリセット
-		matWorld *= matScale; // ワールド行列にスケーリングを反映
-		matWorld *= matRot; // ワールド行列に回転を反映
-		matWorld *= matTrans; // ワールド行列に平行移動を反映
+	// ビュープロジェクション行列
+	const XMMATRIX& matViewProjection = camera->GetViewProjectionMatrix();
+	// モデルのメッシュトランスフォーム
+	const XMMATRIX& modelTransform = model->GetModelTransform();
+	// カメラ座標
+	const XMFLOAT3& cameraPos = camera->GetEye();
+
+	HRESULT result;
+	// 定数バッファへデータ転送
+	ConstBufferDataTransform* constMap = nullptr;
+	result = constBuffTransform->Map(0, nullptr, (void**)&constMap);
+	if (SUCCEEDED(result)) {
+		constMap->viewproj = matViewProjection;
+		constMap->world = modelTransform * matWorld;
+		constMap->cameraPos = cameraPos;
+		constBuffTransform->Unmap(0, nullptr);
 	}
 
-	// 親オブジェクトがあれば
-	if (parent != nullptr) {
-		// 親オブジェクトのワールド行列を掛ける
-		matWorld *= parent->matWorld;
-	}
+
 }
 
-void Object3d::SetCollider(BaseCollider * collider)
+
+void Object3d::Draw(ID3D12GraphicsCommandList* cmdList)
 {
-	collider->SetObject(this);
-	this->collider = collider;
-	// コリジョンマネージャに追加
-	CollisionManager::GetInstance()->AddCollider(collider);
+	// モデルの割り当てがなければ描画しない
+	if (model == nullptr) {
+		return;
+	}
+	// パイプラインステートの設定
+	cmdList->SetPipelineState(pipelinestate.Get());
+	// ルートシグネチャの設定
+	cmdList->SetGraphicsRootSignature(rootsignature.Get());
+	// プリミティブ形状を設定
+	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	// 定数バッファビューをセット
+	cmdList->SetGraphicsRootConstantBufferView(0, constBuffTransform->GetGPUVirtualAddress());
 
-	UpdateWorldMatrix();
-	collider->Update();
+	// モデル描画
+	model->Draw(cmdList);
 }
 
-XMFLOAT3 Object3d::GetWorldPosition()
-{
-	XMFLOAT3 worldpos;
 
-	worldpos.x = matWorld.r[3].m128_f32[0];
-	worldpos.y = matWorld.r[3].m128_f32[1];
-	worldpos.z = matWorld.r[3].m128_f32[2];
-
-	return worldpos;
-}
