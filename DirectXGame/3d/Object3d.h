@@ -31,6 +31,12 @@ public: // 静的メンバ関数
 	/// </summary>
 	static void CreateGraphicsPipeline();
 
+public: // 定数
+	// ボーンの最大数
+	static const int MAX_BONES = 32;
+
+
+
 private: // 静的メンバ変数
 	// デバイス
 	static ID3D12Device* device;
@@ -93,6 +99,15 @@ protected: // メンバ変数
 	// モデル
 	Model* model = nullptr;
 
+
+	// 定数バッファ（スキン）
+	ComPtr<ID3D12Resource> constBuffSkin;
+
+	// 定数バッファ用データ構造体（スキニング）
+	struct ConstBufferDataSkin
+	{
+		XMMATRIX bones[MAX_BONES];
+	};
 
 
 
