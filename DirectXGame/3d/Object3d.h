@@ -83,11 +83,19 @@ public: // メンバ関数
 	void Draw(ID3D12GraphicsCommandList* cmdList);
 
 
+	/// <summary>
+	/// アニメーション開始
+	/// </summary>
+	void PlayAnimation();
+
+
+
 protected: // メンバ変数
 	// 定数バッファ
 	ComPtr<ID3D12Resource> constBuffTransform;
 
 
+private:
 	// ローカルスケール
 	XMFLOAT3 scale = { 1,1,1 };
 	// X,Y,Z軸回りのローカル回転角
@@ -109,6 +117,18 @@ protected: // メンバ変数
 		XMMATRIX bones[MAX_BONES];
 	};
 
+
+
+	// 1フレームの時間
+	FbxTime frameTime;
+	// アニメーション開始時間
+	FbxTime startTime;
+	// アニメーション終了時間
+	FbxTime endTime;
+	// 現在時間（アニメーション）
+	FbxTime currentTime;
+	// アニメーション再生中
+	bool isPlay = false;
 
 
 
